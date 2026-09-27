@@ -1,4 +1,5 @@
 """python test_main.py — voz sintetizada (SAPI, voz es-ES) en lugar del micrófono."""
+import math
 import subprocess
 import tempfile
 import threading
@@ -32,7 +33,9 @@ audio = wave.open(str(wav)).readframes(10**9) + b"\0" * main.RATE * 2  # + 1 s d
 
 
 class FakeMic:  # sustituye a sd.RawInputStream; al acabar el audio para el motor
-    def __init__(self, **kw): self.pos = 0
+    def __init__(self, **kw):
+        global mic
+        mic, self.pos = self, 0
     def __enter__(self): return self
     def __exit__(self, *a): pass
     def read(self, frames):
@@ -44,10 +47,16 @@ class FakeMic:  # sustituye a sd.RawInputStream; al acabar el audio para el moto
 
 
 main.sd.RawInputStream = FakeMic
-heard, done = [], threading.Event()
-engine = main.VoiceEngine(heard.append, print)
-engine.start(["saltar", "disparar"])
-assert done.wait(120), "timeout"
-print("oído:", heard)
-assert heard == ["saltar", "disparar", "saltar", "saltar"], heard
+heard, first_fire = [], {}
+engine = main.VoiceEngine(lambda w: heard.append((w, mic.pos)), print)
+for wait in (0, 3, math.inf):  # velocidad máxima, intermedio, precisión máxima
+    heard.clear()
+    done = threading.Event()
+    engine.wait = wait
+    engine.start(["saltar", "disparar"])
+    assert done.wait(120), "timeout"
+    assert [w for w, _ in heard] == ["saltar", "disparar", "saltar", "saltar"], (wait, heard)
+    first_fire[wait] = heard[0][1] / (main.RATE * 2)
+    print(f"wait={wait}: primer 'saltar' pulsado a {first_fire[wait]:.1f} s del audio")
+assert first_fire[0] < first_fire[3] < first_fire[math.inf], first_fire
 print("OK")
