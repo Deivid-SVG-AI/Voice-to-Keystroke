@@ -25,6 +25,18 @@ for bad in ("", "numx", "banana"):
         raise AssertionError(bad)
     except ValueError:
         pass
+V = KeyCode.from_char("v")  # pulsar para hablar: on_key solo usa estos atributos, sin Tk
+gui = types.SimpleNamespace(engine=types.SimpleNamespace(ptt=True, held=False), ptt_target=V,
+                            keys=types.SimpleNamespace(canonical=lambda k: k), ptt_toggle=False, ptt_down=False)
+key = lambda down, injected=False: main.AppGUI.on_key(gui, V, injected, down)
+key(True); assert gui.engine.held
+key(False); assert not gui.engine.held  # mantener para hablar
+gui.ptt_toggle = True
+for down in (True, True, True, False):  # alternar, con la repetición automática de la tecla
+    key(down)
+assert gui.engine.held
+key(True); key(False); assert not gui.engine.held
+key(True, injected=True); assert not gui.engine.held  # las teclas que pulsa la propia app no cuentan
 assert main.chunk_level(b"\0\0" * 1600) == 0
 assert main.chunk_level(array.array("h", [32767, -32767] * 800).tobytes()) == 100
 

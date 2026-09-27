@@ -28,9 +28,7 @@ rem --hidden-import pynput...: pynput carga su backend de Windows dinamicamente
     --specpath "%TEMP%\VoiceToKeystroke-build" ^
     "%~dp0main.py" || goto :error
 
-rem config.json (reglas y ajustes) vive junto al .exe: copia el actual si alli no hay uno.
-if exist config.json if not exist dist\config.json copy config.json dist\ >nul
-
+rem No se copia config.json: el .exe crea el suyo junto a el al cambiar cualquier ajuste.
 echo.
 echo Listo: %~dp0dist\VoiceToKeystroke.exe
 pause

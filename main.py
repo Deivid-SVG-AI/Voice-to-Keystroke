@@ -24,12 +24,14 @@ Uso:
     Teclas válidas: una letra o dígito ("a", "7"), nombres de pynput ("space", "enter",
     "tab", "esc", "backspace", "up", "f5", ...), alias en español ("espacio", "intro"),
     teclado numérico "num0".."num9" y combinaciones con "+" ("ctrl+c").
-    Modo: "Manos libres" escucha siempre; "Pulsar para hablar" solo mientras mantienes
-    la tecla elegida (por defecto V). Esa tecla también le llega a la ventana activa.
+    Modo: "Manos libres" escucha siempre; "Pulsar para hablar" escucha con la tecla elegida
+    (por defecto V), "Mantener para hablar" mientras la mantienes o "Alternar" de una
+    pulsación a la siguiente. Esa tecla también le llega a la ventana activa.
     Velocidad/Precisión: cuánto debe mantenerse reconocida una palabra antes de pulsar
     la tecla (0 = al instante, máximo = al terminar la frase).
-    Umbral de volumen: ignora palabras más bajas que el umbral (el eco de las bocinas
-    llega más bajo que tu voz). La marca ▼ es el recomendado: ruido de fondo + 10 %.
+    Sensibilidad: 100 % acepta cualquier volumen; al bajarla se ignoran las palabras más
+    bajas (el eco de las bocinas llega más bajo que tu voz). La marca ▼ es la recomendada:
+    ruido de fondo + 10 %.
     Filtro de bocinas: descarta una palabra si también sonó por los altavoces (+300 ms).
     Si la ventana destino se ejecuta como administrador, esta app también debe hacerlo.
 """
@@ -228,7 +230,7 @@ class VoiceEngine:
                         for w, first, last in found:
                             lvl = max(levels[first:last + 1], default=0)
                             if lvl < self.threshold:
-                                say(f"«{w}» ignorada: volumen {lvl} % < umbral {self.threshold} %")
+                                say(f"«{w}» ignorada: volumen {lvl} % < mínimo {self.threshold} % (sube la sensibilidad)")
                             elif self.echo:
                                 delayed.append((time.monotonic(), w))
                             else:
@@ -338,9 +340,11 @@ class AppGUI:
             data = {}
         if "mappings" not in data:  # config.json antiguo: solo el diccionario de reglas
             data = {"mappings": data}
-        cfg = {"wait": 0, "threshold": 0, "echo": False, "ptt": False, "ptt_key": "v", **data}
+        cfg = {"wait": 0, "sensitivity": 100, "echo": False, "ptt": False, "ptt_toggle": True, "ptt_key": "v", **data}
         self.mappings = cfg["mappings"]
-        self.engine.threshold, self.engine.echo, self.engine.ptt = cfg["threshold"], cfg["echo"], cfg["ptt"]
+        # Sensibilidad 100 % = acepta cualquier volumen; el motor trabaja con el volumen mínimo (100 - sensibilidad).
+        self.engine.threshold, self.engine.echo, self.engine.ptt = 100 - cfg["sensitivity"], cfg["echo"], cfg["ptt"]
+        self.ptt_toggle, self.ptt_down = cfg["ptt_toggle"], False
 
         root.title("Voice-to-Keystroke")
         root.minsize(880, 600)
@@ -395,14 +399,23 @@ class AppGUI:
         modes.pack(fill="x")
         modes.columnconfigure((0, 1), weight=1, uniform="mode")
         self.mode = tk.BooleanVar(value=cfg["ptt"])  # solo un modo activo: son radiobuttons
-        for col, (text, value) in enumerate((("Manos libres", False), ("Pulsar para hablar", True))):
-            ttk.Radiobutton(modes, text=text, variable=self.mode, value=value, style="Toolbutton",
-                            command=self.set_mode).grid(row=0, column=col, sticky="ew", padx=(6 * col, 0))
+        self.ptt_toggle_var = tk.BooleanVar(value=cfg["ptt_toggle"])
+        self.ptt_widgets = []  # solo aplican a "Pulsar para hablar": se deshabilitan en manos libres
+        for row, var, options, style in (
+                (0, self.mode, (("Manos libres", False), ("Pulsar para hablar", True)), "Toolbutton"),
+                (1, self.ptt_toggle_var, (("Mantener para hablar", False), ("Alternar", True)), "Small.Toolbutton")):
+            for col, (text, value) in enumerate(options):
+                b = ttk.Radiobutton(modes, text=text, variable=var, value=value, style=style, command=self.set_mode)
+                b.grid(row=row, column=col, sticky="ew", padx=(6 * col, 0), pady=(6 * row, 0))
+                if row:
+                    self.ptt_widgets.append(b)
         keyrow = ttk.Frame(right)
         keyrow.pack(fill="x", pady=(8, 0))
-        ttk.Label(keyrow, text="Tecla para hablar", style="Muted.TLabel").pack(side="left")
+        self.ptt_label = ttk.Label(keyrow, text="Tecla para hablar", style="Muted.TLabel")
+        self.ptt_label.pack(side="left")
         self.ptt_entry = ttk.Entry(keyrow, width=8, justify="center")
         self.ptt_entry.pack(side="right")
+        self.ptt_widgets += [self.ptt_label, self.ptt_entry]
         self.ptt_entry.insert(0, cfg["ptt_key"])
         self.ptt_entry.bind("<Return>", lambda e: self.set_ptt_key())
         self.ptt_entry.bind("<FocusOut>", lambda e: self.set_ptt_key())
@@ -420,17 +433,24 @@ class AppGUI:
         self.scale.set(cfg["wait"])
         self.set_wait(cfg["wait"])
 
-        ttk.Label(right, text="UMBRAL DE VOLUMEN", style="Caption.TLabel").pack(anchor="w", pady=(22, 4))
-        self.meter = LevelSlider(right, self.set_threshold)
-        self.meter.value = cfg["threshold"]
-        self.meter.pack(fill="x")
+        # El medidor se dibuja en escala de volumen: el tirador marca el volumen mínimo y tu voz pasa
+        # si la barra lo cruza. Por eso la sensibilidad es alta a la izquierda y baja a la derecha.
+        ttk.Label(right, text="SENSIBILIDAD", style="Caption.TLabel").pack(anchor="w", pady=(22, 4))
+        sens = ttk.Frame(right)
+        sens.pack(fill="x")
+        sens.columnconfigure(1, weight=1)
+        ttk.Label(sens, text="ALTA", style="Caption.TLabel").grid(row=0, column=0)
+        self.meter = LevelSlider(sens, self.set_threshold)
+        self.meter.value = self.engine.threshold
+        self.meter.grid(row=0, column=1, sticky="ew", padx=12)
         self.meter.bind("<ButtonRelease-1>", lambda e: self.save(), add="+")
         self.meter.bind("<KeyRelease>", lambda e: self.save(), add="+")
+        ttk.Label(sens, text="BAJA", style="Caption.TLabel").grid(row=0, column=2)
         row = ttk.Frame(right)
         row.pack(fill="x", pady=(6, 0))
         self.threshold_text = tk.StringVar()
         ttk.Label(row, textvariable=self.threshold_text, style="Muted.TLabel").pack(side="left")
-        ttk.Button(row, text="Usar recomendado", command=self.use_recommended).pack(side="right")
+        ttk.Button(row, text="Usar recomendada", command=self.use_recommended).pack(side="right")
 
         self.echo_var = tk.BooleanVar(value=cfg["echo"])
         ttk.Checkbutton(right, text="Ignorar lo que suena en las bocinas", variable=self.echo_var,
@@ -476,9 +496,17 @@ class AppGUI:
               darkcolor=[("active", C["accent_hi"])], bordercolor=[("active", C["accent_hi"])])
         s.configure("Toolbutton", background=C["surface2"], foreground=C["muted"], lightcolor=C["surface2"],
                     darkcolor=C["surface2"], padding=(10, 7), anchor="center")
-        s.map("Toolbutton", background=[("selected", C["accent"]), ("active", C["border"])],
-              lightcolor=[("selected", C["accent"])], darkcolor=[("selected", C["accent"])],
-              bordercolor=[("selected", C["accent"])], foreground=[("selected", "white")])
+        s.map("Toolbutton", background=[("disabled", "selected", C["border"]), ("disabled", C["surface"]),
+                                        ("selected", C["accent"]), ("active", C["border"])],
+              lightcolor=[("disabled", C["surface"]), ("selected", C["accent"])],
+              darkcolor=[("disabled", C["surface"]), ("selected", C["accent"])],
+              bordercolor=[("disabled", C["border"]), ("selected", C["accent"])],
+              foreground=[("disabled", C["meter"]), ("selected", "white")])
+        s.configure("Small.Toolbutton", padding=(8, 5), font=(FONT, 9))
+        # clam pinta de gris claro los widgets deshabilitados y los que tienen el ratón encima
+        s.map(".", background=[], foreground=[("disabled", C["meter"])])
+        s.map("TEntry", fieldbackground=[("disabled", C["surface"])], foreground=[("disabled", C["meter"])])
+        s.map("TCombobox", background=[("active", C["border"]), ("pressed", C["border"])])
         s.configure("TCheckbutton", indicatorbackground=C["surface2"], indicatorforeground="white",
                     upperbordercolor=C["muted"], lowerbordercolor=C["muted"], indicatorsize=16,
                     indicatormargin=(0, 0, 10, 0))
@@ -505,9 +533,12 @@ class AppGUI:
         bg = C["listen"] if on else C["idle"]
         self.style.configure(".", background=bg)
         self.style.configure("Pill.TLabel", foreground=C["live"] if on else C["accent_hi"] if running else C["muted"])
+        verb = "PULSA" if self.ptt_toggle else "MANTÉN"
         self.pill.config(text="●  ESCUCHANDO" if on else
-                         f"●  MANTÉN {self.ptt_key.upper()} PARA HABLAR" if running else "●  DETENIDO")
+                         f"●  {verb} {self.ptt_key.upper()} PARA HABLAR" if running else "●  DETENIDO")
         self.toggle_btn.config(text="■   Stop Listening" if running else "▶   Start Listening")
+        for w in self.ptt_widgets:
+            w.state(["!disabled" if self.engine.ptt else "disabled"])
         self.meter.config(bg=bg)
         self.root.configure(bg=bg)
         try:  # barra de título del mismo color (Windows 11: DWMWA_BORDER/CAPTION/TEXT_COLOR)
@@ -536,7 +567,8 @@ class AppGUI:
         self.save()
 
     def set_mode(self):
-        self.engine.ptt, self.engine.held = self.mode.get(), False
+        self.engine.ptt, self.ptt_toggle = self.mode.get(), self.ptt_toggle_var.get()
+        self.engine.held = self.ptt_down = False
         self.save()
         self.apply_state()
 
@@ -561,8 +593,13 @@ class AppGUI:
             self.apply_state()
 
     def on_key(self, key, injected, down):  # hilo de pynput
-        if not injected and self.engine.ptt and self.keys.canonical(key) == self.ptt_target:
+        if injected or not self.engine.ptt or self.keys.canonical(key) != self.ptt_target:
+            return
+        if not self.ptt_toggle:  # mantener para hablar
             self.engine.held = down
+        elif down and not self.ptt_down:  # alternar; la repetición automática al mantenerla no cuenta
+            self.engine.held = not self.engine.held
+        self.ptt_down = down
 
     def set_echo(self):
         self.engine.echo = self.echo_var.get()
@@ -586,8 +623,8 @@ class AppGUI:
         self.meter.level = self.engine.level if self.engine.running else 0
         self.meter.recommended = rec
         self.meter.draw()
-        self.threshold_text.set(f"Umbral: {self.engine.threshold} %\n" +
-                                (f"Recomendado ▼: {rec} %" if rec is not None else "Recomendado: se mide al escuchar"))
+        self.threshold_text.set(f"Sensibilidad: {100 - self.engine.threshold} %\n" +
+                                (f"Recomendada ▼: {100 - rec} %" if rec is not None else "Recomendada: se mide al escuchar"))
         if (self.engine.running, self.engine.capturing) != self.shown:
             self.apply_state()
         self.root.after(100, self.poll)
@@ -610,8 +647,9 @@ class AppGUI:
         self.changed()
 
     def save(self):
-        cfg = {"wait": self.wait, "threshold": self.engine.threshold, "echo": self.engine.echo,
-               "ptt": self.engine.ptt, "ptt_key": self.ptt_key, "mappings": self.mappings}
+        cfg = {"wait": self.wait, "sensitivity": 100 - self.engine.threshold, "echo": self.engine.echo,
+               "ptt": self.engine.ptt, "ptt_toggle": self.ptt_toggle, "ptt_key": self.ptt_key,
+               "mappings": self.mappings}
         try:
             CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError as e:
