@@ -37,7 +37,9 @@ import array
 import ctypes
 import json
 import math
+import os
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -51,7 +53,8 @@ import vosk
 from pynput import keyboard
 from pynput.keyboard import Controller, Key, KeyCode
 
-CONFIG = Path(__file__).with_name("config.json")
+# En el .exe (PyInstaller), __file__ vive en una carpeta temporal: config.json va junto al .exe.
+CONFIG = Path(sys.executable if getattr(sys, "frozen", False) else __file__).with_name("config.json")
 RATE = 16000  # los modelos de vosk están entrenados a 16 kHz
 CHUNK = RATE // 10  # 100 ms de audio por lectura: la unidad de tiempo de todo el motor
 MAX_WAIT = 10  # posición "precisión máxima" del slider: solo el resultado final de vosk
@@ -635,6 +638,8 @@ class AppGUI:
 
 
 if __name__ == "__main__":
+    if sys.stderr is None:  # .exe sin consola: la barra de descarga del modelo (tqdm) escribe en stderr
+        sys.stdout = sys.stderr = open(os.devnull, "w")
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)  # nítido en pantallas con escalado
     except (AttributeError, OSError):
@@ -642,3 +647,6 @@ if __name__ == "__main__":
     root = tk.Tk()
     AppGUI(root)
     root.mainloop()
+    # Salir sin finalizar el intérprete: los hilos del motor pueden seguir dentro de vosk/PortAudio
+    # y a veces eso termina en un access violation al cerrar. config.json ya se guardó en cada cambio.
+    os._exit(0)
